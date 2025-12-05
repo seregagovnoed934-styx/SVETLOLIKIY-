@@ -1,0 +1,6 @@
+﻿ls
+invalid_command_here # эта строка должна быть пропущена
+cd /tmp
+another_bad_command
+ls
+exit

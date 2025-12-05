@@ -71,7 +71,7 @@ class ShellGUI(tk.Tk):
         if args.script:
             self.run_script(args.script)
 
-    # ---------- Вывод ----------
+    # ---------- Вывод ----
     def print_output(self, text):
         self.output.config(state=tk.NORMAL)
         self.output.insert(tk.END, text)
@@ -172,5 +172,5 @@ class ShellGUI(tk.Tk):
 # ---------------- ЗАПУСК ----------------
 if __name__ == "__main__":
     app = ShellGUI()
-    app.mainloop()
+    app.mainloop() 
 

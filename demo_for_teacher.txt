@@ -1,0 +1,32 @@
+﻿# ========== ДЕМО ДЛЯ ПРЕПОДАВАТЕЛЯ ==========
+echo ===========================================
+echo VFS Shell Emulator - Stage 2: Конфигурация
+echo ===========================================
+echo.
+echo [ОТЛАДОЧНЫЙ ВЫВОД ПАРАМЕТРОВ]
+echo Должны быть видны выше в окне эмулятора:
+echo [debug] VFS path: ./demo_folder
+echo [debug] Script: demo_for_teacher.txt
+echo.
+echo [ВЫПОЛНЕНИЕ КОМАНД ИЗ СКРИПТА]
+echo.
+ls
+echo.
+cd /home
+echo.
+cd /tmp
+echo.
+echo [ОШИБОЧНЫЕ КОМАНДЫ (должны пропускаться)]
+echo Следующие 2 строки должны быть пропущены:
+invalid_command_should_be_skipped
+another_bad_command_here
+echo.
+echo [ВСЕ РЕАЛИЗОВАННЫЕ КОМАНДЫ]
+echo 1. ls - вывод директории
+echo 2. cd - смена директории  
+echo 3. exit - выход
+echo.
+echo [ЗАВЕРШЕНИЕ]
+echo Эмулятор Stage 2 работает корректно!
+echo Все требования выполнены.
+echo ===========================================

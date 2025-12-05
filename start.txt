@@ -1,0 +1,18 @@
+﻿# ====== ВСЕ КОМАНДЫ ЭМУЛЯТОРА ======
+echo Демонстрация Stage 2: Конфигурация
+echo Параметры: --vfs=./myvfs --script=start.txt
+echo.
+echo 1. Команда ls:
+ls
+echo.
+echo 2. Команда cd:
+cd /home
+echo.
+echo 3. Команда cd с путем:
+cd /tmp
+echo.
+echo 4. Команда exit (не выполнится сразу из скрипта):
+echo exit
+echo.
+echo ====== ДЕМО ЗАВЕРШЕНО ======
+echo Закрой окно эмулятора
