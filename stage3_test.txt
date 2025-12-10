@@ -1,0 +1,12 @@
+ls
+cat notd
+cd home
+ls
+cat readme.txt
+cd user/documents
+ls
+cat doc1.txt
+cd /
+pwd
+echo Тестирование завершено!
+exit
