@@ -1,0 +1,28 @@
+# Тестовый скрипт для Stage 5
+# Проверка mkdir и chmod
+
+echo "=== Тест mkdir ==="
+mkdir test1
+mkdir test2
+mkdir /root_test
+mkdir test1/subdir
+
+echo "=== Проверка создания ==="
+ls
+ls test1/
+
+echo "=== Тест chmod ==="
+chmod 777 test1
+chmod 644 test2
+chmod 755 /root_test
+
+echo "=== Проверка прав ==="
+ls -l
+ls -l test1/
+
+echo "=== Тест ошибок ==="
+mkdir test1  # уже существует
+mkdir /nonexistent/parent/child  # родителя нет
+chmod 999 test1  # неверный режим
+chmod 755 nonexistent  # файл не существует
+mkdir ""  # пустой путь
