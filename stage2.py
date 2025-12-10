@@ -1,13 +1,14 @@
 """
 VFS Shell Emulator — Stage 2
 Добавлено:
-- Параметры командной строки: --vfs <путь>, --script <файл>
+- Параметры командной строки: --vfs <путь>, --script <файл>, --auto <команды>
 - Выполнение стартового скрипта: команды выполняются как ввод пользователя
+- Автоматическое выполнение команд через --auto
 - Ошибочные строки в скрипте пропускаются, но показываются в выводе
 - Отладочный вывод параметров
 
 Запуск:
-    python stage2.py --vfs=./myvfs --script=start.txt
+    python stage2.py --vfs=./myvfs --script=start.txt --auto="ls;cd /home"
 """
 
 import os
@@ -32,6 +33,7 @@ PROMPT = "VFS> "
 parser = argparse.ArgumentParser()
 parser.add_argument("--vfs", type=str, default=None, help="Путь к директории-VFS")
 parser.add_argument("--script", type=str, default=None, help="Стартовый скрипт")
+parser.add_argument("--auto", type=str, default="", help="Автовыполнение команд через ;")
 args = parser.parse_args()
 
 # ---------------- GUI SHELL ----------------
@@ -65,11 +67,24 @@ class ShellGUI(tk.Tk):
         # стартовые сообщения
         self.print_output("Stage 2 emulator ready.\n")
         self.print_output(f"[debug] VFS path: {args.vfs}\n")
-        self.print_output(f"[debug] Script: {args.script}\n\n")
+        self.print_output(f"[debug] Script: {args.script}\n")
+        if args.auto:
+            self.print_output(f"[debug] Auto commands: {args.auto}\n")
+        self.print_output("\n")
 
         # выполнить стартовый скрипт
         if args.script:
             self.run_script(args.script)
+
+        # выполнить автоматические команды
+        if args.auto:
+            self.print_output(f"\n[auto] Выполнение команд: {args.auto}\n")
+            for cmd in args.auto.split(';'):
+                cmd = cmd.strip()
+                if cmd:
+                    self.print_output(PROMPT + cmd + "\n")
+                    self.execute_command(cmd)
+            self.print_output("\n[auto] Все команды выполнены!\n")
 
     # ---------- Вывод ----
     def print_output(self, text):
@@ -172,5 +187,4 @@ class ShellGUI(tk.Tk):
 # ---------------- ЗАПУСК ----------------
 if __name__ == "__main__":
     app = ShellGUI()
-    app.mainloop() 
-
+    app.mainloop()
