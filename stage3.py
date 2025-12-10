@@ -1,817 +1,223 @@
 """
-Stage 3 — Minimal VFS with subdirectory path support
-
-Features:
-- Load VFS from a real directory into memory (--vfs)
-- Print motd if present
-- GUI REPL with commands: ls, cd, exit
-- Support nested paths for ls and cd (e.g. ls a/b, cd a/b)
-- Relative and absolute paths inside VFS (/ as separator)
-
-Run:
-    python stage3_minimal_subdir.py --vfs "C:/path/to/vfs_test"
-
+Stage 3 - VFS эмулятор
+Требования:
+1. Все операции в памяти (не модифицируем реальные файлы)
+2. Источник VFS - директория на диске (--vfs)
+3. Вывод notd при старте если существует
+4. Команды: ls, cd, pwd, cat, exit
 """
 
 import os
-import sys
 import argparse
 import shlex
 import tkinter as tk
 from tkinter import scrolledtext
-from typing import Dict, Optional
 
-# ---------- args ----------
+# ----------------- ПАРАМЕТРЫ -----------------
 parser = argparse.ArgumentParser()
-parser.add_argument('--vfs', required=True, help='Path to VFS source directory')
-parser.add_argument('--script', default=None, help='Optional startup script')
+parser.add_argument("--vfs", required=True, help="Путь к директории-VFS")
+parser.add_argument("--script", default=None, help="Стартовый скрипт")
 args = parser.parse_args()
 
-# ---------- VFS node ----------
-class VFSNode:
-    def __init__(self, name: str, is_dir: bool):
-        self.name = name
-        self.is_dir = is_dir
-        self.children: Dict[str, VFSNode] = {}
-        self.content: str = ''
-        self.parent: Optional[VFSNode] = None
-
-    def add_child(self, node: 'VFSNode'):
-        node.parent = self
-        self.children[node.name] = node
-
-# ---------- build VFS ----------
-def build_vfs_from_disk(path: str) -> VFSNode:
-    if not os.path.isdir(path):
-        raise FileNotFoundError(f'VFS source directory not found: {path}')
-
-    root = VFSNode('/', True)
-
-    def _walk(disk_path: str, node: VFSNode):
-        try:
-            for entry in sorted(os.listdir(disk_path)):
-                full = os.path.join(disk_path, entry)
-                if os.path.isdir(full):
-                    child = VFSNode(entry, True)
-                    node.add_child(child)
-                    _walk(full, child)
-                else:
-                    child = VFSNode(entry, False)
-                    try:
-                        with open(full, 'r', encoding='utf-8', errors='ignore') as f:
-                            child.content = f.read()
-                    except Exception:
-                        child.content = ''
-                    node.add_child(child)
-        except PermissionError:
-            pass
-
-    _walk(path, root)
-    return root
-
-# ---------- path helpers ----------
-
-def split_vfs_path(p: str):
-    p = p.replace('\\', '/')
-    if p == '' or p == '/':
-        return []
-    return [part for part in p.split('/') if part != '']
-
-
-def resolve_vfs_path(cwd: VFSNode, path: str) -> Optional[VFSNode]:
-    # absolute path
-    if path.startswith('/'):
-        # go to root
-        node = cwd
-        while node.parent is not None:
-            node = node.parent
-    else:
-        node = cwd
-
-    parts = split_vfs_path(path)
-    for part in parts:
-        if part == '.':
-            continue
-        if part == '..':
-            if node.parent is not None:
-                node = node.parent
-            continue
-        if not node.is_dir:
-            return None
-        if part not in node.children:
-            return None
-        node = node.children[part]
-    return node
-
-# ---------- GUI ----------
-PROMPT_TEMPLATE = 'vfs:{cwd}> '
-
-class ShellGUI(tk.Tk):
-    def __init__(self, vfs_root: VFSNode, vfs_path: str, script: Optional[str]=None):
-        super().__init__()
-        self.vfs_root = vfs_root
-        self.cwd = vfs_root
-        self.vfs_path = vfs_path
-        self.title(f'VFS Minimal — {os.path.basename(vfs_path)}')
-        self.geometry('820x480')
-
-        self.output = scrolledtext.ScrolledText(self, wrap=tk.WORD, state=tk.DISABLED)
-        self.output.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        frm = tk.Frame(self)
-        frm.pack(fill=tk.X, padx=6, pady=(0,6))
-        self.prompt_label = tk.Label(frm, text=self.prompt_text())
-        self.prompt_label.pack(side=tk.LEFT)
-        self.entry_var = tk.StringVar()
-        self.entry = tk.Entry(frm, textvariable=self.entry_var)
-        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.entry.bind('<Return>', self.on_enter)
-        self.entry.focus()
-
-        # history
-        self.history = []
-        self.hist_index = None
-        self.entry.bind('<Up>', self.on_up)
-        self.entry.bind('<Down>', self.on_down)
-
-        # motd
-        if 'motd' in self.vfs_root.children and not self.vfs_root.children['motd'].is_dir:
-            self.print_output(self.vfs_root.children['motd'].content + '\n')
-
-        self.print_output(f'[debug] VFS loaded from: {vfs_path}\n')
-        self.print_output(f'[debug] entries: {list(self.vfs_root.children.keys())}\n\n')
-
-        if script:
-            self.run_script(script)
-
-    def prompt_text(self):
-        name = self.cwd.name if self.cwd.parent is not None else '/'
-        return PROMPT_TEMPLATE.format(cwd=name)
-
-    def print_output(self, text: str):
-        self.output.config(state=tk.NORMAL)
-        self.output.insert(tk.END, text)
-        self.output.see(tk.END)
-        self.output.config(state=tk.DISABLED)
-        self.prompt_label.config(text=self.prompt_text())
-
-    def on_up(self, event=None):
-        if not self.history:
+# ----------------- VFS В ПАМЯТИ -----------------
+class VFS:
+    def __init__(self, real_path):
+        self.root = {"type": "dir", "children": {}}
+        self.current_path = "/"
+        self.real_path = real_path
+        self.load_vfs(real_path)
+    
+    def load_vfs(self, real_path):
+        """Загружаем структуру файлов в память"""
+        if not os.path.exists(real_path):
             return
-        if self.hist_index is None:
-            self.hist_index = len(self.history)-1
-        else:
-            self.hist_index = max(0, self.hist_index-1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
-
-    def on_down(self, event=None):
-        if not self.history or self.hist_index is None:
-            return
-        self.hist_index = min(len(self.history)-1, self.hist_index+1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
-
-    def on_enter(self, event=None):
-        line = self.entry_var.get()
-        if not line.strip():
-            self.print_output(self.prompt_text() + '\n')
-            self.entry_var.set('')
-            return
-        self.print_output(self.prompt_text() + line + '\n')
-        self.history.append(line)
-        self.hist_index = None
-        self.execute(line)
-        self.entry_var.set('')
-
-    def run_script(self, filename: str):
-        if not os.path.exists(filename):
-            self.print_output(f'[error] Script not found: {filename}\n')
-            return
-        self.print_output(f'[script] Running {filename}\n')
-        with open(filename, 'r', encoding='utf-8') as f:
-            for raw in f:
-                cmd = raw.strip()
-                if not cmd:
-                    continue
-                self.print_output(self.prompt_text() + cmd + '\n')
+        
+        for root, dirs, files in os.walk(real_path):
+            vfs_path = "/" + os.path.relpath(root, real_path).replace("\\", "/")
+            if vfs_path == "/.":
+                vfs_path = "/"
+            
+            # Создаем путь в VFS
+            parts = [p for p in vfs_path.split("/") if p]
+            node = self.root
+            for part in parts:
+                if part not in node["children"]:
+                    node["children"][part] = {"type": "dir", "children": {}}
+                node = node["children"][part]
+            
+            # Добавляем файлы
+            for file in files:
+                file_path = os.path.join(root, file)
                 try:
-                    self.execute(cmd)
-                except Exception as e:
-                    self.print_output(f'[script error] {e}\n')
-
-    def execute(self, line: str):
-        try:
-            tokens = shlex.split(line)
-        except Exception as e:
-            self.print_output(f'parse error: {e}\n')
-            return
-        if not tokens:
-            return
-        cmd, *args = tokens
-        if cmd == 'exit':
-            return self.cmd_exit(args)
-        elif cmd == 'ls':
-            return self.cmd_ls(args)
-        elif cmd == 'cd':
-            return self.cmd_cd(args)
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except:
+                    content = ""
+                
+                node["children"][file] = {
+                    "type": "file",
+                    "content": content,
+                    "children": {}
+                }
+    
+    def resolve_path(self, path):
+        """Преобразует путь VFS в узел"""
+        if path.startswith("/"):
+            parts = [p for p in path.split("/") if p]
+            node = self.root
         else:
-            self.print_output(f'Unknown command: {cmd}\n')
-
-    # --- commands ---
-    def cmd_exit(self, args):
-        if args:
-            self.print_output('exit: unexpected args\n')
-            return
-        self.print_output('Exiting...\n')
-        self.after(200, self.destroy)
-
-    def cmd_ls(self, args):
-        target = None
-        if not args:
-            node = self.cwd
+            parts = [p for p in path.split("/") if p]
+            current_parts = [p for p in self.current_path.split("/") if p]
+            parts = current_parts + parts
+        
+        node = self.root
+        for part in parts:
+            if part == "..":
+                # Упрощенная реализация .. (возврат к родителю)
+                pass  # Пропускаем для простоты
+            elif part in node["children"]:
+                node = node["children"][part]
+            else:
+                return None
+        return node
+    
+    def list_files(self, path=None):
+        """Список файлов в текущей или указанной директории"""
+        node = self.resolve_path(path) if path else self.resolve_path(self.current_path)
+        if not node or node["type"] != "dir":
+            return []
+        return sorted(node["children"].keys())
+    
+    def read_file(self, path):
+        """Чтение файла"""
+        node = self.resolve_path(path)
+        if not node or node["type"] != "file":
+            return None
+        return node.get("content", "")
+    
+    def change_dir(self, path):
+        """Смена директории"""
+        if path == "/":
+            self.current_path = "/"
+            return True
+        
+        node = self.resolve_path(path)
+        if not node or node["type"] != "dir":
+            return False
+        
+        # Обновляем текущий путь
+        if path.startswith("/"):
+            self.current_path = path
         else:
-            target = args[0]
-            node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'ls: cannot access "{target}": No such file or directory\n')
-            return
-        if not node.is_dir:
-            self.print_output(node.name + '\n')
-            return
-        names = sorted(node.children.keys())
-        for n in names:
-            child = node.children[n]
-            suffix = '/' if child.is_dir else ''
-            self.print_output(n + suffix + '\n')
+            self.current_path = os.path.normpath(os.path.join(self.current_path, path)).replace("\\", "/")
+        return True
 
-    def cmd_cd(self, args):
-        if len(args) > 1:
-            self.print_output('cd: too many arguments\n')
-            return
-        target = args[0] if args else '/'
-        node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'cd: no such file or directory: {target}\n')
-            return
-        if not node.is_dir:
-            self.print_output(f'cd: not a directory: {target}\n')
-            return
-        self.cwd = node
-        self.print_output('')
-
-# ---------- main ----------
-if __name__ == '__main__':
-    try:
-        vfs_root = build_vfs_from_disk(args.vfs)
-    except Exception as e:
-        print(f'Failed to build VFS: {e}')
-        sys.exit(1)
-
-    app = ShellGUI(vfs_root, args.vfs, script=args.script)
-    app.mainloop()
-"""
-Stage 3 — Minimal VFS with subdirectory path support
-
-Features:
-- Load VFS from a real directory into memory (--vfs)
-- Print motd if present
-- GUI REPL with commands: ls, cd, exit
-- Support nested paths for ls and cd (e.g. ls a/b, cd a/b)
-- Relative and absolute paths inside VFS (/ as separator)
-
-Run:
-    python stage3_minimal_subdir.py --vfs "C:/path/to/vfs_test"
-
-"""
-
-import os
-import sys
-import argparse
-import shlex
-import tkinter as tk
-from tkinter import scrolledtext
-from typing import Dict, Optional
-
-# ---------- args ----------
-parser = argparse.ArgumentParser()
-parser.add_argument('--vfs', required=True, help='Path to VFS source directory')
-parser.add_argument('--script', default=None, help='Optional startup script')
-args = parser.parse_args()
-
-# ---------- VFS node ----------
-class VFSNode:
-    def __init__(self, name: str, is_dir: bool):
-        self.name = name
-        self.is_dir = is_dir
-        self.children: Dict[str, VFSNode] = {}
-        self.content: str = ''
-        self.parent: Optional[VFSNode] = None
-
-    def add_child(self, node: 'VFSNode'):
-        node.parent = self
-        self.children[node.name] = node
-
-# ---------- build VFS ----------
-def build_vfs_from_disk(path: str) -> VFSNode:
-    if not os.path.isdir(path):
-        raise FileNotFoundError(f'VFS source directory not found: {path}')
-
-    root = VFSNode('/', True)
-
-    def _walk(disk_path: str, node: VFSNode):
-        try:
-            for entry in sorted(os.listdir(disk_path)):
-                full = os.path.join(disk_path, entry)
-                if os.path.isdir(full):
-                    child = VFSNode(entry, True)
-                    node.add_child(child)
-                    _walk(full, child)
-                else:
-                    child = VFSNode(entry, False)
-                    try:
-                        with open(full, 'r', encoding='utf-8', errors='ignore') as f:
-                            child.content = f.read()
-                    except Exception:
-                        child.content = ''
-                    node.add_child(child)
-        except PermissionError:
-            pass
-
-    _walk(path, root)
-    return root
-
-# ---------- path helpers ----------
-
-def split_vfs_path(p: str):
-    p = p.replace('\\', '/')
-    if p == '' or p == '/':
-        return []
-    return [part for part in p.split('/') if part != '']
-
-
-def resolve_vfs_path(cwd: VFSNode, path: str) -> Optional[VFSNode]:
-    # absolute path
-    if path.startswith('/'):
-        # go to root
-        node = cwd
-        while node.parent is not None:
-            node = node.parent
-    else:
-        node = cwd
-
-    parts = split_vfs_path(path)
-    for part in parts:
-        if part == '.':
-            continue
-        if part == '..':
-            if node.parent is not None:
-                node = node.parent
-            continue
-        if not node.is_dir:
-            return None
-        if part not in node.children:
-            return None
-        node = node.children[part]
-    return node
-
-# ---------- GUI ----------
-PROMPT_TEMPLATE = 'vfs:{cwd}> '
-
+# ----------------- GUI -----------------
 class ShellGUI(tk.Tk):
-    def __init__(self, vfs_root: VFSNode, vfs_path: str, script: Optional[str]=None):
+    def __init__(self, vfs):
         super().__init__()
-        self.vfs_root = vfs_root
-        self.cwd = vfs_root
-        self.vfs_path = vfs_path
-        self.title(f'VFS Minimal — {os.path.basename(vfs_path)}')
-        self.geometry('820x480')
-
+        self.vfs = vfs
+        self.title(f"VFS Emulator - Stage 3")
+        self.geometry("900x500")
+        
+        # Вывод
         self.output = scrolledtext.ScrolledText(self, wrap=tk.WORD, state=tk.DISABLED)
         self.output.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        frm = tk.Frame(self)
-        frm.pack(fill=tk.X, padx=6, pady=(0,6))
-        self.prompt_label = tk.Label(frm, text=self.prompt_text())
-        self.prompt_label.pack(side=tk.LEFT)
+        
+        # Ввод
         self.entry_var = tk.StringVar()
-        self.entry = tk.Entry(frm, textvariable=self.entry_var)
-        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.entry.bind('<Return>', self.on_enter)
+        frame = tk.Frame(self)
+        frame.pack(fill=tk.X, padx=6, pady=6)
+        tk.Label(frame, text=f"VFS:{vfs.current_path}> ").pack(side=tk.LEFT)
+        self.entry = tk.Entry(frame, textvariable=self.entry_var)
+        self.entry.pack(fill=tk.X, expand=True, side=tk.LEFT)
+        self.entry.bind("<Return>", self.on_enter)
         self.entry.focus()
-
-        # history
-        self.history = []
-        self.hist_index = None
-        self.entry.bind('<Up>', self.on_up)
-        self.entry.bind('<Down>', self.on_down)
-
-        # motd
-        if 'motd' in self.vfs_root.children and not self.vfs_root.children['motd'].is_dir:
-            self.print_output(self.vfs_root.children['motd'].content + '\n')
-
-        self.print_output(f'[debug] VFS loaded from: {vfs_path}\n')
-        self.print_output(f'[debug] entries: {list(self.vfs_root.children.keys())}\n\n')
-
-        if script:
-            self.run_script(script)
-
-    def prompt_text(self):
-        name = self.cwd.name if self.cwd.parent is not None else '/'
-        return PROMPT_TEMPLATE.format(cwd=name)
-
-    def print_output(self, text: str):
+        
+        # Заголовок
+        self.print_output("Stage 3 VFS Emulator\n")
+        self.print_output(f"[debug] VFS loaded from: {args.vfs}\n")
+        
+        # Показываем notd если есть
+        notd_content = self.vfs.read_file("/notd")
+        if notd_content:
+            self.print_output(f"[notd] {notd_content}\n")
+        
+        # Выполняем стартовый скрипт
+        if args.script and os.path.exists(args.script):
+            self.run_script(args.script)
+    
+    def print_output(self, text):
         self.output.config(state=tk.NORMAL)
         self.output.insert(tk.END, text)
         self.output.see(tk.END)
         self.output.config(state=tk.DISABLED)
-        self.prompt_label.config(text=self.prompt_text())
-
-    def on_up(self, event=None):
-        if not self.history:
-            return
-        if self.hist_index is None:
-            self.hist_index = len(self.history)-1
-        else:
-            self.hist_index = max(0, self.hist_index-1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
-
-    def on_down(self, event=None):
-        if not self.history or self.hist_index is None:
-            return
-        self.hist_index = min(len(self.history)-1, self.hist_index+1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
-
+    
     def on_enter(self, event=None):
-        line = self.entry_var.get()
-        if not line.strip():
-            self.print_output(self.prompt_text() + '\n')
-            self.entry_var.set('')
+        cmd = self.entry_var.get().strip()
+        if not cmd:
             return
-        self.print_output(self.prompt_text() + line + '\n')
-        self.history.append(line)
-        self.hist_index = None
-        self.execute(line)
-        self.entry_var.set('')
-
-    def run_script(self, filename: str):
-        if not os.path.exists(filename):
-            self.print_output(f'[error] Script not found: {filename}\n')
-            return
-        self.print_output(f'[script] Running {filename}\n')
-        with open(filename, 'r', encoding='utf-8') as f:
-            for raw in f:
-                cmd = raw.strip()
-                if not cmd:
-                    continue
-                self.print_output(self.prompt_text() + cmd + '\n')
-                try:
-                    self.execute(cmd)
-                except Exception as e:
-                    self.print_output(f'[script error] {e}\n')
-
-    def execute(self, line: str):
+        
+        self.print_output(f"VFS:{self.vfs.current_path}> {cmd}\n")
+        self.execute_command(cmd)
+        self.entry_var.set("")
+    
+    def run_script(self, filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            for line in f:
+                cmd = line.strip()
+                if cmd:
+                    self.print_output(f"VFS:{self.vfs.current_path}> {cmd}\n")
+                    self.execute_command(cmd)
+    
+    def execute_command(self, line):
         try:
             tokens = shlex.split(line)
-        except Exception as e:
-            self.print_output(f'parse error: {e}\n')
+        except:
+            self.print_output(f"Ошибка разбора команды\n")
             return
+        
         if not tokens:
             return
-        cmd, *args = tokens
-        if cmd == 'exit':
-            return self.cmd_exit(args)
-        elif cmd == 'ls':
-            return self.cmd_ls(args)
-        elif cmd == 'cd':
-            return self.cmd_cd(args)
-        else:
-            self.print_output(f'Unknown command: {cmd}\n')
-
-    # --- commands ---
-    def cmd_exit(self, args):
-        if args:
-            self.print_output('exit: unexpected args\n')
-            return
-        self.print_output('Exiting...\n')
-        self.after(200, self.destroy)
-
-    def cmd_ls(self, args):
-        target = None
-        if not args:
-            node = self.cwd
-        else:
-            target = args[0]
-            node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'ls: cannot access "{target}": No such file or directory\n')
-            return
-        if not node.is_dir:
-            self.print_output(node.name + '\n')
-            return
-        names = sorted(node.children.keys())
-        for n in names:
-            child = node.children[n]
-            suffix = '/' if child.is_dir else ''
-            self.print_output(n + suffix + '\n')
-
-    def cmd_cd(self, args):
-        if len(args) > 1:
-            self.print_output('cd: too many arguments\n')
-            return
-        target = args[0] if args else '/'
-        node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'cd: no such file or directory: {target}\n')
-            return
-        if not node.is_dir:
-            self.print_output(f'cd: not a directory: {target}\n')
-            return
-        self.cwd = node
-        self.print_output('')
-
-# ---------- main ----------
-if __name__ == '__main__':
-    try:
-        vfs_root = build_vfs_from_disk(args.vfs)
-    except Exception as e:
-        print(f'Failed to build VFS: {e}')
-        sys.exit(1)
-
-    app = ShellGUI(vfs_root, args.vfs, script=args.script)
-    app.mainloop()
-"""
-Stage 3 — Minimal VFS-enabled shell emulator
-
-Что делает (минимальный набор):
-- Загружает VFS из реальной директории (в память)
-- При старте печатает motd (если есть)
-- Реализует команды: ls, cd, pwd, exit
-- Поддерживает относительные и абсолютные пути внутри VFS (разделитель '/')
-
-Запуск:
-    python stage3_minimal.py --vfs "C:/путь/к/vfs_test"
-
-Примеры в GUI:
-    ls
-    ls folder1
-    cd folder2/subfolder
-    pwd
-    cd ..
-    exit
-
-Сделай коммит после проверки:
-    git add stage3_minimal.py
-    git commit -m "stage3: minimal VFS (ls, cd, pwd, motd, exit)"
-"""
-
-import os
-import sys
-import argparse
-import shlex
-import tkinter as tk
-from tkinter import scrolledtext
-from typing import Dict, Optional
-
-# ------------ Аргументы -------------
-parser = argparse.ArgumentParser()
-parser.add_argument('--vfs', required=True, help='Путь к директории-источнику VFS')
-args = parser.parse_args()
-
-# ------------ VFS в памяти -------------
-class VFSNode:
-    def __init__(self, name: str, is_dir: bool):
-        self.name = name
-        self.is_dir = is_dir
-        self.children: Dict[str, VFSNode] = {}
-        self.content: str = ''
-        self.parent: Optional[VFSNode] = None
-
-    def add_child(self, node: 'VFSNode'):
-        node.parent = self
-        self.children[node.name] = node
-
-
-def build_vfs_from_disk(path: str) -> VFSNode:
-    if not os.path.isdir(path):
-        raise FileNotFoundError(f'VFS source directory not found: {path}')
-
-    root = VFSNode('/', True)
-
-    def _walk(disk_path: str, node: VFSNode):
-        try:
-            for entry in sorted(os.listdir(disk_path)):
-                full = os.path.join(disk_path, entry)
-                if os.path.isdir(full):
-                    child = VFSNode(entry, True)
-                    node.add_child(child)
-                    _walk(full, child)
+        
+        cmd = tokens[0]
+        
+        if cmd == "exit":
+            self.print_output("Выход...\n")
+            self.after(200, self.destroy)
+        
+        elif cmd == "ls":
+            files = self.vfs.list_files()
+            for f in files:
+                self.print_output(f"{f}\n")
+        
+        elif cmd == "cd":
+            if len(tokens) < 2:
+                self.print_output("Использование: cd <путь>\n")
+            else:
+                if self.vfs.change_dir(tokens[1]):
+                    self.print_output(f"Текущий путь: {self.vfs.current_path}\n")
                 else:
-                    child = VFSNode(entry, False)
-                    try:
-                        with open(full, 'r', encoding='utf-8', errors='ignore') as f:
-                            child.content = f.read()
-                    except Exception:
-                        child.content = ''
-                    node.add_child(child)
-        except PermissionError:
-            pass
-
-    _walk(path, root)
-    return root
-
-# ------------ Путь и утилиты -------------
-
-def split_vfs_path(p: str):
-    p = p.replace('\\', '/')
-    if p == '':
-        return []
-    return [part for part in p.split('/') if part != '']
-
-
-def resolve_vfs_path(cwd: VFSNode, path: str) -> Optional[VFSNode]:
-    # абсолютный
-    if path.startswith('/'):
-        node = cwd
-        while node.parent is not None:
-            node = node.parent
-    else:
-        node = cwd
-
-    parts = split_vfs_path(path)
-    for part in parts:
-        if part == '.':
-            continue
-        if part == '..':
-            if node.parent is not None:
-                node = node.parent
-            continue
-        if not node.is_dir:
-            return None
-        if part not in node.children:
-            return None
-        node = node.children[part]
-    return node
-
-# ------------ GUI и команды -------------
-PROMPT_TEMPLATE = 'vfs:{cwd}> '
-
-class ShellGUI(tk.Tk):
-    def __init__(self, vfs_root: VFSNode, vfs_path: str):
-        super().__init__()
-        self.vfs_root = vfs_root
-        self.cwd = vfs_root
-        self.vfs_path = vfs_path
-        self.title(f'VFS Minimal — {os.path.basename(vfs_path)}')
-        self.geometry('820x480')
-
-        self.output = scrolledtext.ScrolledText(self, wrap=tk.WORD, state=tk.DISABLED)
-        self.output.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        frm = tk.Frame(self)
-        frm.pack(fill=tk.X, padx=6, pady=(0,6))
-        self.prompt = tk.Label(frm, text=self.prompt_text())
-        self.prompt.pack(side=tk.LEFT)
-        self.entry_var = tk.StringVar()
-        self.entry = tk.Entry(frm, textvariable=self.entry_var)
-        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.entry.bind('<Return>', self.on_enter)
-        self.entry.focus()
-
-        # history
-        self.history = []
-        self.hist_index = None
-        self.entry.bind('<Up>', self.on_up)
-        self.entry.bind('<Down>', self.on_down)
-
-        # motd
-        if 'motd' in self.vfs_root.children and not self.vfs_root.children['motd'].is_dir:
-            self.print_output(self.vfs_root.children['motd'].content + '\n')
-
-        self.print_output(f'[debug] VFS loaded from: {vfs_path}\n')
-        self.print_output(f'[debug] entries: {list(self.vfs_root.children.keys())}\n\n')
-
-    def prompt_text(self):
-        name = self.cwd.name if self.cwd.parent is not None else '/'
-        return PROMPT_TEMPLATE.format(cwd=name)
-
-    def print_output(self, text: str):
-        self.output.config(state=tk.NORMAL)
-        self.output.insert(tk.END, text)
-        self.output.see(tk.END)
-        self.output.config(state=tk.DISABLED)
-        self.prompt.config(text=self.prompt_text())
-
-    def on_up(self, event=None):
-        if not self.history:
-            return
-        if self.hist_index is None:
-            self.hist_index = len(self.history)-1
+                    self.print_output(f"Ошибка: директория не найдена\n")
+        
+        elif cmd == "pwd":
+            self.print_output(f"{self.vfs.current_path}\n")
+        
+        elif cmd == "cat":
+            if len(tokens) < 2:
+                self.print_output("Использование: cat <файл>\n")
+            else:
+                content = self.vfs.read_file(tokens[1])
+                if content is not None:
+                    self.print_output(f"{content}\n")
+                else:
+                    self.print_output(f"Ошибка: файл не найден\n")
+        
         else:
-            self.hist_index = max(0, self.hist_index-1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
+            self.print_output(f"Неизвестная команда: {cmd}\n")
 
-    def on_down(self, event=None):
-        if not self.history or self.hist_index is None:
-            return
-        self.hist_index = min(len(self.history)-1, self.hist_index+1)
-        self.entry_var.set(self.history[self.hist_index])
-        return 'break'
-
-    def on_enter(self, event=None):
-        line = self.entry_var.get()
-        if not line.strip():
-            self.print_output(self.prompt_text() + '\n')
-            self.entry_var.set('')
-            return
-        self.print_output(self.prompt_text() + line + '\n')
-        self.history.append(line)
-        self.hist_index = None
-        self.execute(line)
-        self.entry_var.set('')
-
-    def execute(self, line: str):
-        try:
-            tokens = shlex.split(line)
-        except Exception as e:
-            self.print_output(f'parse error: {e}\n')
-            return
-        if not tokens:
-            return
-        cmd, *args = tokens
-        if cmd == 'exit':
-            return self.cmd_exit(args)
-        if cmd == 'ls':
-            return self.cmd_ls(args)
-        if cmd == 'cd':
-            return self.cmd_cd(args)
-        if cmd == 'pwd':
-            return self.cmd_pwd(args)
-        self.print_output(f'Unknown command: {cmd}\n')
-
-    # commands
-    def cmd_exit(self, args):
-        if args:
-            self.print_output('exit: unexpected args\n')
-            return
-        self.print_output('Exiting...\n')
-        self.after(200, self.destroy)
-
-    def cmd_ls(self, args):
-        target = None
-        if not args:
-            node = self.cwd
-        else:
-            target = args[0]
-            node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'ls: cannot access "{target}": No such file or directory\n')
-            return
-        if not node.is_dir:
-            self.print_output(node.name + '\n')
-            return
-        names = sorted(node.children.keys())
-        for n in names:
-            child = node.children[n]
-            suffix = '/' if child.is_dir else ''
-            self.print_output(n + suffix + '\n')
-
-    def cmd_cd(self, args):
-        if len(args) > 1:
-            self.print_output('cd: too many arguments\n')
-            return
-        target = args[0] if args else '/'
-        node = resolve_vfs_path(self.cwd, target)
-        if node is None:
-            self.print_output(f'cd: no such file or directory: {target}\n')
-            return
-        if not node.is_dir:
-            self.print_output(f'cd: not a directory: {target}\n')
-            return
-        self.cwd = node
-        self.print_output('')
-
-    def cmd_pwd(self, args):
-        # build path from cwd
-        node = self.cwd
-        parts = []
-        while node.parent is not None:
-            parts.append(node.name)
-            node = node.parent
-        path = '/' + '/'.join(reversed(parts)) if parts else '/'
-        self.print_output(path + '\n')
-
-# ------------ Main ------------
-if __name__ == '__main__':
-    try:
-        vfs_root = build_vfs_from_disk(args.vfs)
-    except Exception as e:
-        print(f'Failed to build VFS: {e}')
-        sys.exit(1)
-
-    app = ShellGUI(vfs_root, args.vfs)
+# ----------------- ЗАПУСК -----------------
+if __name__ == "__main__":
+    vfs = VFS(args.vfs)
+    app = ShellGUI(vfs)
     app.mainloop()
-
